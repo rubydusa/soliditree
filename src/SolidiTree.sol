@@ -55,60 +55,70 @@ contract SolidiTree {
         if (parent >= currentNodes)
             revert InvalidParent();
 
-        // update the data of the node
+        /*
+         * Update Data
+         */
         _data[currentNodes] = data;
         
-        /* 
-        // solidity doesn't allow constant expressions in assembly for some reason
-        uint256 _MAX_BITS = MAX_BITS;
-        uint256 _NODES_PER_SLOT = NODES_PER_SLOT;
+        /*
+         * Update Parents
+         */
+        uint256 nodesInLast = currentNodes % NODES_PER_SLOT;
+        if (nodesInLast == 0) {
+            // TODO: if computing parents length using currentNodes, use inline assembly instead of push
+            _parents.push(parent);
+        } else {
+            // TODO: compute parents length using currentNodes
+            uint256 last = _parents[_parents.length - 1];
+            uint256 offset = nodesInLast * MAX_BITS;
+
+            uint256 updatedLast = last | (parent << offset);
+            _parents[_parents.length - 1] = updatedLast;
+        }
+
+        /*
+         * Update Children
+         *
+         * Use inline assembly in order to enable skipping large portions of the array
+         * Example:
+         * 
+         * currentNodes = 4000
+         * parent = 96
+         * parent has no other children
+         * wihtout assembly you need to insert 238 slots to the array before you can update the relavent part
+         */ 
+
+        // inline assembly does not allow constant experssions in inline assembly for some reason
         uint256 _CHILDREN_SLOT = CHILDREN_SLOT;
-        uint256 _PARENTS_SLOT = PARENTS_SLOT;
-
-        // todo (backburner): check if parents update - branched version saves gas
         assembly {
-            /s*
-             *  Update Parents
-             *s/
+            // the parent's children slot
+            let parent_childs_s := add(_CHILDREN_SLOT, parent)
+            // inside the parents children array, what is the index that needs to be written to
+            let child_i := div(currentNodes, 0x100)
+            
+            // load the parent's children slot into memory
+            let free := mload(0x40)
+            mstore(free, parent_childs_s)
+            mstore(0x40, add(free, 0x20))
 
-            let parents_length := sload(_parents.slot)  // TODO: compute using currentNodes
-            // the last slot in the parents array
-            let parents_last_s := add(_PARENTS_SLOT, parents_length)
-            // the last slot value
-            let parents_last := sload(parents_last_s)
+            // the slot inside the parents's children array
+            let child_slot_s := add(keccak256(free, 0x20), child_i)
 
-            // how many nodes are in the last slot
-            let nodes_in_last := mod(currentNodes, _NODES_PER_SLOT)
-
-            // since length starts at zero, the first time insert is called
-            // parents_last is _parents.slot, so consider a 0 amount of nodes in last to be full
-            let is_full := iszero(nodes_in_last)
+            // the value of the slot
+            let child_slot_v := sload(child_slot_s)
 
             // bit offset
-            let offset := mul(nodes_in_last, _MAX_BITS)
-            // updated parents slot
-            let parents_last_u := or(mul(parents_last, not(is_full)), shl(offset, parent))
-
-            // update parents' last slot
-            sstore(add(parents_last_s, is_full), parents_last_u)
-
-            // in case full, update array length
-            if is_full {
-                sstore(_parents.slot, add(parents_length, 1))
-            }
-
-            /s*
-             * Update Children
-             *s/
+            let offset := mod(currentNodes, 0x100)
             
-            // currentNodes (pre-update) is the index of the new node.
-            // since children is a bit 
-            let children_i := div(currentNodes, 256)
-            let parent_child := add(_CHILDREN_SLOT, parent)
+            // updated child slot value
+            let child_slot_u := or(child_slot_v, shl(offset, 1))
+
+            // update the child slot
+            sstore(child_slot_s, child_slot_u)
             
-            // update the amount of current nodes
-            sstore(_currentNodes.slot, add(currentNodes, 1))
+            // always update length:
+            // this is more efficent because checking whether or not length needs to be updated requires an additonal sload
+            sstore(parent_childs_s, add(child_i, 1))
         }
-        */
     }
 }
